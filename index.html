@@ -254,7 +254,7 @@
 <main>
 
   <div id="offlineBanner" class="banner" style="display:none;">
-    <span>You're not connected to a shared Gist yet — changes are only saved in this browser. Others won't see them.</span>
+    <span>You're not connected to the shared Google Sheet yet — changes are only saved in this browser. Others won't see them.</span>
     <button class="gold" onclick="toggleSettings()">Set up sharing</button>
   </div>
 
@@ -265,7 +265,7 @@
     </div>
     <div class="sec-body">
       <div class="warn">
-        The GitHub token you enter here grants write access to <b>all</b> Gists on that GitHub account, not just this one. For a client-facing tracker like this, consider creating a dedicated free GitHub account just to host the data, rather than using your personal one. Anyone you give the token to can edit any of that account's gists.
+        This tracker's shared data lives in a Google Sheet, served through a small Apps Script "Web App" you deploy once. The Web App URL is not secret-sensitive by default — anyone with the link can read and write. If you want to stop randoms who get the URL from editing it, set an <code>APP_SECRET</code> in the script's Project Settings and enter the same passphrase below. See the README for full setup steps.
       </div>
       <div class="settings-grid">
         <div class="field">
@@ -273,12 +273,12 @@
           <input id="setName" type="text" placeholder="e.g. Agus">
         </div>
         <div class="field">
-          <label>Gist ID</label>
-          <input id="setGistId" type="text" placeholder="e.g. 3b1f...">
+          <label>Apps Script Web App URL</label>
+          <input id="setApiUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec">
         </div>
         <div class="field">
-          <label>GitHub Token (needs "gist" scope)</label>
-          <input id="setToken" type="password" placeholder="ghp_...">
+          <label>Shared passphrase (optional)</label>
+          <input id="setSecret" type="password" placeholder="only if APP_SECRET is set">
         </div>
         <div class="field">
           <label>Pool total (USD)</label>
@@ -402,7 +402,7 @@
 
 </main>
 
-<footer>RMAL Content Credit Tracker — data syncs via a GitHub Gist you control.</footer>
+<footer>RMAL Content Credit Tracker — data syncs via a Google Sheet you control.</footer>
 
 <script>
 /* ---------------------------------------------------------
@@ -421,8 +421,7 @@ const SERVICES = [
 function rmalRate(agency){ return agency==null ? null : Math.round(agency*0.8*100)/100; }
 
 const DEFAULT_POOL_TOTAL = 44600; // 36000 + 8600, per original workbook
-const GIST_FILENAME = 'rmal-content-pool-data.json';
-const POLL_MS = 20000;
+const POLL_MS = 15000;
 
 /* ---------------------------------------------------------
    Local settings (per-browser, never synced)
@@ -434,7 +433,7 @@ function saveSettingsObj(s){ localStorage.setItem('rmalTrackerSettings', JSON.st
 let settings = loadSettings();
 
 /* ---------------------------------------------------------
-   Shared state (synced via Gist, falls back to localStorage)
+   Shared state (synced via Google Sheets, falls back to localStorage)
 --------------------------------------------------------- */
 function defaultState(){
   return {
@@ -491,7 +490,7 @@ function onServiceChange(){
   }
 }
 
-function addEntry(){
+async function addEntry(){
   const sel = document.getElementById('newService');
   const svc = SERVICES.find(s=>s.id===sel.value);
   const qty = parseFloat(document.getElementById('newQty').value)||0;
@@ -504,47 +503,52 @@ function addEntry(){
   const name = svc.id==='custom' ? (customName||'Custom item') : svc.name;
   if(svc.id==='custom' && !customName){ alert('Enter a name for the custom item.'); return; }
 
-  const entry = {
-    id:uid(),
-    serviceId:svc.id,
-    name,
-    qty,
-    unitRate:rate,
-    date,
-    note,
-    active:true,
-    createdBy:actorName(),
-    createdAt:new Date().toISOString(),
-    updatedAt:new Date().toISOString()
-  };
-  state.entries.push(entry);
-  logHistory('add', `${entry.createdBy} logged "${name}" × ${qty} (${date})`, -qty*rate);
-  touchAndSync();
+  const params = { serviceId:svc.id, name, qty, unitRate:rate, date, note };
+
+  if(serverConfigured()){
+    await callAction('addEntry', params);
+  } else {
+    const entry = {
+      id:uid(), serviceId:svc.id, name, qty, unitRate:rate, date, note,
+      active:true, createdBy:actorName(), createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()
+    };
+    state.entries.push(entry);
+    logHistory('add', `${entry.createdBy} logged "${name}" × ${qty} (${date})`, -qty*rate);
+    touchLocal();
+  }
 
   document.getElementById('newQty').value = 1;
   document.getElementById('newNote').value = '';
   document.getElementById('newCustomName').value = '';
 }
 
-function toggleEntry(id){
+async function toggleEntry(id){
   const e = state.entries.find(x=>x.id===id);
   if(!e) return;
+  if(serverConfigured()){
+    await callAction('toggleEntry', { id });
+    return;
+  }
   e.active = !e.active;
   e.updatedAt = new Date().toISOString();
   const subtotal = e.qty*e.unitRate;
   logHistory(e.active?'check':'uncheck',
     `${actorName()} ${e.active?'ticked':'unticked'} "${e.name}" × ${e.qty} (${e.date})`,
     e.active ? -subtotal : subtotal);
-  touchAndSync();
+  touchLocal();
 }
 
-function deleteEntry(id){
+async function deleteEntry(id){
   const e = state.entries.find(x=>x.id===id);
   if(!e) return;
   if(!confirm(`Remove "${e.name}" (${e.date}) from the log? This stays visible in the history.`)) return;
+  if(serverConfigured()){
+    await callAction('deleteEntry', { id });
+    return;
+  }
   state.entries = state.entries.filter(x=>x.id!==id);
   logHistory('delete', `${actorName()} removed "${e.name}" × ${e.qty} (${e.date}) from the log`, e.active ? e.qty*e.unitRate : 0);
-  touchAndSync();
+  touchLocal();
 }
 
 /* ---------------------------------------------------------
@@ -625,11 +629,11 @@ function render(){
 
   // settings fields
   document.getElementById('setName').value = settings.name||'';
-  document.getElementById('setGistId').value = settings.gistId||'';
-  document.getElementById('setToken').value = settings.token||'';
+  document.getElementById('setApiUrl').value = settings.apiUrl||'';
+  document.getElementById('setSecret').value = settings.secret||'';
   document.getElementById('setPoolTotal').value = state.poolTotal;
 
-  document.getElementById('offlineBanner').style.display = settings.gistId ? 'none' : 'flex';
+  document.getElementById('offlineBanner').style.display = serverConfigured() ? 'none' : 'flex';
 }
 
 function toggleSection(id){
@@ -642,141 +646,122 @@ function toggleSettings(){
 }
 
 /* ---------------------------------------------------------
-   Gist sync
+   Google Sheets sync (via Apps Script Web App)
 --------------------------------------------------------- */
-let syncing = false;
-let dirty = false;
-
 function setStatus(mode, text){
   const pill = document.getElementById('statusPill');
   pill.className = mode;
   document.getElementById('statusText').textContent = text;
 }
 
-async function gistGet(){
-  const headers = {'Accept':'application/vnd.github+json'};
-  if(settings.token) headers['Authorization'] = 'token '+settings.token;
-  const res = await fetch(`https://api.github.com/gists/${settings.gistId}`, {headers});
+function serverConfigured(){ return !!(settings.apiUrl && settings.apiUrl.trim()); }
+
+function buildUrl(){
+  const u = new URL(settings.apiUrl.trim());
+  if(settings.secret) u.searchParams.set('secret', settings.secret);
+  return u.toString();
+}
+
+async function fetchState(){
+  const res = await fetch(buildUrl(), { method:'GET' });
   if(!res.ok) throw new Error('GET failed: '+res.status);
   const json = await res.json();
-  const file = json.files && json.files[GIST_FILENAME];
-  if(!file) return null;
-  const text = file.truncated ? await (await fetch(file.raw_url)).text() : file.content;
-  try{ return JSON.parse(text); }catch(e){ return null; }
+  if(json.error) throw new Error(json.error);
+  return json;
 }
 
-async function gistPut(newState){
-  if(!settings.token) throw new Error('A token is required to save.');
-  const headers = {'Accept':'application/vnd.github+json','Authorization':'token '+settings.token,'Content-Type':'application/json'};
-  const body = { files: { [GIST_FILENAME]: { content: JSON.stringify(newState, null, 2) } } };
-  const res = await fetch(`https://api.github.com/gists/${settings.gistId}`, {method:'PATCH', headers, body:JSON.stringify(body)});
-  if(!res.ok) throw new Error('PATCH failed: '+res.status);
-  return res.json();
-}
-
-function mergeStates(local, remote){
-  if(!remote) return local;
-  if(!local) return remote;
-  const entryMap = {};
-  [...remote.entries, ...local.entries].forEach(e=>{
-    const existing = entryMap[e.id];
-    if(!existing || (e.updatedAt||'') > (existing.updatedAt||'')) entryMap[e.id] = e;
+async function postAction(action, params){
+  // text/plain avoids a CORS preflight against the Apps Script endpoint
+  const res = await fetch(buildUrl(), {
+    method:'POST',
+    headers:{ 'Content-Type':'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, actor:actorName(), secret:settings.secret||'', ...params })
   });
-  // deletions: an entry present in one but not the other is treated as deleted only if
-  // it's missing from whichever side has the *newer* overall updatedAt; simplest safe
-  // behaviour is a union, so nothing is ever silently lost.
-  const historyMap = {};
-  [...remote.history, ...local.history].forEach(h=>{ historyMap[h.id] = h; });
+  if(!res.ok) throw new Error('POST failed: '+res.status);
+  const json = await res.json();
+  if(json.error) throw new Error(json.error);
+  return json;
+}
 
-  const newer = (remote.updatedAt||'') > (local.updatedAt||'') ? remote : local;
-  return {
-    version:1,
-    poolTotal: newer.poolTotal,
-    entries: Object.values(entryMap),
-    history: Object.values(historyMap),
-    updatedAt: new Date().toISOString()
-  };
+function applyServerState(json){
+  state = { poolTotal: json.poolTotal, entries: json.entries||[], history: json.history||[] };
+  saveLocalState();
+  render();
+}
+
+let syncing = false;
+async function callAction(action, params){
+  if(!serverConfigured()) return;
+  syncing = true;
+  setStatus('ok','Saving…');
+  try{
+    const json = await postAction(action, params);
+    applyServerState(json);
+    setStatus('ok','Synced');
+  }catch(e){
+    setStatus('err','Save failed — check the Web App URL in Settings');
+    console.error(e);
+  }finally{
+    syncing = false;
+  }
 }
 
 async function pullRemote(silent){
-  if(!settings.gistId) return;
+  if(!serverConfigured()) return;
+  if(syncing) return; // don't clobber an in-flight write with a stale read
   try{
-    const remote = await gistGet();
-    if(remote){
-      state = mergeStates(state, remote);
-      saveLocalState();
-      render();
-    }
+    const json = await fetchState();
+    applyServerState(json);
     setStatus('ok','Synced');
   }catch(e){
-    setStatus('err','Sync error');
+    setStatus('err','Sync error — check the Web App URL');
     if(!silent) console.error(e);
   }
 }
 
-async function pushLocal(){
-  if(!settings.gistId || !settings.token) return;
-  if(syncing){ dirty = true; return; }
-  syncing = true;
-  setStatus('ok','Saving…');
-  try{
-    const remote = await gistGet();
-    const merged = mergeStates(state, remote);
-    merged.updatedAt = new Date().toISOString();
-    await gistPut(merged);
-    state = merged;
-    saveLocalState();
-    render();
-    setStatus('ok','Synced');
-  }catch(e){
-    setStatus('err','Save failed — retry from Settings');
-    console.error(e);
-  }finally{
-    syncing = false;
-    if(dirty){ dirty=false; pushLocal(); }
-  }
-}
-
-let saveTimer = null;
-function touchAndSync(){
-  state.updatedAt = new Date().toISOString();
+function touchLocal(){
   saveLocalState();
   render();
-  if(settings.gistId && settings.token){
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(pushLocal, 900);
-  }
 }
 
 function manualSync(){
-  if(!settings.gistId){ alert('Enter a Gist ID first.'); return; }
-  pullRemote(false).then(()=>{
-    if(settings.token) pushLocal();
-  });
+  if(!serverConfigured()){ alert('Enter the Apps Script Web App URL first.'); return; }
+  pullRemote(false);
 }
 
 function saveSettingsAndConnect(){
   settings.name = document.getElementById('setName').value.trim();
-  settings.gistId = document.getElementById('setGistId').value.trim();
-  settings.token = document.getElementById('setToken').value.trim();
+  settings.apiUrl = document.getElementById('setApiUrl').value.trim();
+  settings.secret = document.getElementById('setSecret').value.trim();
   saveSettingsObj(settings);
+
   const newTotal = parseFloat(document.getElementById('setPoolTotal').value);
-  if(!isNaN(newTotal) && newTotal !== state.poolTotal){
-    logHistory('pool', `${actorName()} set total pool credit to ${money(newTotal)}`);
-    state.poolTotal = newTotal;
-  }
-  document.getElementById('settingsStatus').textContent = 'Connecting…';
-  if(settings.gistId){
-    pullRemote(false).then(()=>{
-      touchAndSync();
-      document.getElementById('settingsStatus').textContent = 'Connected. Data will sync automatically.';
-    }).catch(()=>{
-      document.getElementById('settingsStatus').textContent = 'Could not reach that Gist — check the ID and token.';
-    });
+  const statusEl = document.getElementById('settingsStatus');
+
+  if(serverConfigured()){
+    statusEl.textContent = 'Connecting…';
+    setStatus('off','Connecting…');
+    (async ()=>{
+      try{
+        if(!isNaN(newTotal) && newTotal !== state.poolTotal){
+          await callAction('setPoolTotal', { poolTotal:newTotal });
+        } else {
+          await pullRemote(false);
+        }
+        statusEl.textContent = 'Connected. Data will sync automatically.';
+      }catch(e){
+        statusEl.textContent = 'Could not reach that Web App — check the URL (and passphrase, if set).';
+        setStatus('err','Not connected');
+      }
+    })();
   } else {
+    if(!isNaN(newTotal) && newTotal !== state.poolTotal){
+      logHistory('pool', `${actorName()} set total pool credit to ${money(newTotal)}`);
+      state.poolTotal = newTotal;
+    }
     setStatus('off','Not synced');
-    touchAndSync();
-    document.getElementById('settingsStatus').textContent = 'Saved locally only (no Gist ID set).';
+    touchLocal();
+    statusEl.textContent = 'Saved locally only (no Web App URL set).';
   }
 }
 
@@ -792,9 +777,9 @@ function clearSettings(){
    Init
 --------------------------------------------------------- */
 (function init(){
-  if(settings.gistId){
+  if(serverConfigured()){
     setStatus('off','Connecting…');
-    pullRemote(true).then(()=>{ if(!settings.token) setStatus('off','Read-only (no token)'); });
+    pullRemote(true);
     setInterval(()=>pullRemote(true), POLL_MS);
   } else {
     setStatus('off','Not synced');
