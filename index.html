@@ -281,7 +281,7 @@
           <input id="setSecret" type="password" placeholder="only if APP_SECRET is set">
         </div>
         <div class="field">
-          <label>Pool total (USD)</label>
+          <label>Pool total (AED)</label>
           <input id="setPoolTotal" type="number" step="0.01">
         </div>
       </div>
@@ -297,16 +297,16 @@
   <div class="cards">
     <div class="card">
       <div class="label">Total pool credit</div>
-      <div class="value" id="cardTotal">$0</div>
+      <div class="value" id="cardTotal">AED 0</div>
       <small class="edit" onclick="toggleSettings()">edit</small>
     </div>
     <div class="card">
       <div class="label">Used (ticked)</div>
-      <div class="value" id="cardUsed">$0</div>
+      <div class="value" id="cardUsed">AED 0</div>
     </div>
     <div class="card">
       <div class="label">Remaining</div>
-      <div class="value" id="cardRemaining">$0</div>
+      <div class="value" id="cardRemaining">AED 0</div>
     </div>
     <div class="progress-wrap">
       <div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--muted);">
@@ -335,7 +335,7 @@
           <input id="newCustomName" type="text" placeholder="Describe item">
         </div>
         <div class="field">
-          <label>Rate (USD, Rmal price)</label>
+          <label>Rate (AED, Rmal price)</label>
           <input id="newRate" type="number" step="0.01">
         </div>
         <div class="field">
@@ -474,7 +474,7 @@ function money(n){
   const v = Number(n)||0;
   const neg = v<0;
   const s = Math.abs(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  return (neg?'-':'')+'$'+s;
+  return (neg?'-':'')+'AED '+s;
 }
 
 /* ---------------------------------------------------------
