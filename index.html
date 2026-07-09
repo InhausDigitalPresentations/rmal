@@ -423,11 +423,24 @@ function rmalRate(agency){ return agency==null ? null : Math.round(agency*0.8*10
 const DEFAULT_POOL_TOTAL = 44600; // 36000 + 8600, per original workbook
 const POLL_MS = 15000;
 
+// Pre-configured so the page connects automatically — nobody needs to touch
+// Settings unless they want to add/change the optional shared passphrase.
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbxWNJrhnHnjb3VpxUuOW-6f2JJ_pixkWVZePBjgW0RNsa80Q34pu4WbNmYBmCQ1Skle/exec';
+const DEFAULT_SECRET = '';
+
 /* ---------------------------------------------------------
    Local settings (per-browser, never synced)
 --------------------------------------------------------- */
 function loadSettings(){
-  try{ return JSON.parse(localStorage.getItem('rmalTrackerSettings')||'{}'); }catch(e){ return {}; }
+  let s;
+  try{ s = JSON.parse(localStorage.getItem('rmalTrackerSettings')||'{}'); }catch(e){ s = {}; }
+  // Auto-fill the shared Web App URL on first visit to this browser, unless
+  // the person has explicitly disconnected (in which case respect that).
+  if(s.apiUrl === undefined && !s.disabled){
+    s.apiUrl = DEFAULT_API_URL;
+    s.secret = DEFAULT_SECRET;
+  }
+  return s;
 }
 function saveSettingsObj(s){ localStorage.setItem('rmalTrackerSettings', JSON.stringify(s)); }
 let settings = loadSettings();
@@ -733,6 +746,7 @@ function saveSettingsAndConnect(){
   settings.name = document.getElementById('setName').value.trim();
   settings.apiUrl = document.getElementById('setApiUrl').value.trim();
   settings.secret = document.getElementById('setSecret').value.trim();
+  delete settings.disabled;
   saveSettingsObj(settings);
 
   const newTotal = parseFloat(document.getElementById('setPoolTotal').value);
@@ -767,7 +781,7 @@ function saveSettingsAndConnect(){
 
 function clearSettings(){
   if(!confirm('Disconnect sharing on this browser? Your local data stays, but it will stop syncing until you reconnect.')) return;
-  settings = {name:settings.name};
+  settings = {name:settings.name, disabled:true};
   saveSettingsObj(settings);
   setStatus('off','Not synced');
   render();
@@ -777,6 +791,13 @@ function clearSettings(){
    Init
 --------------------------------------------------------- */
 (function init(){
+  if(!settings.name){
+    const entered = prompt('What\'s your name? (shown in the change history so it\'s clear who ticked/unticked what)');
+    if(entered && entered.trim()){
+      settings.name = entered.trim();
+      saveSettingsObj(settings);
+    }
+  }
   if(serverConfigured()){
     setStatus('off','Connecting…');
     pullRemote(true);
